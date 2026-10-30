@@ -23,7 +23,11 @@ function formatVal(val, decimals = 5) {
   if (val === null || val === undefined || Number.isNaN(val)) {
     return 'N/D';
   }
-  return Number(val).toFixed(decimals);
+  const num = Number(val);
+  if (num !== 0 && Math.abs(num) < Math.pow(10, -decimals)) {
+    return num.toExponential(3);
+  }
+  return num.toFixed(decimals);
 }
 
 export function GoodnessOfFitTable({ goodnessOfFit, alpha }) {

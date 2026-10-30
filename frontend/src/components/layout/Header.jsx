@@ -12,7 +12,8 @@ import {
   Box,
   Tooltip,
 } from '@mantine/core';
-import { IconSun, IconMoon, IconServer, IconSchool } from '@tabler/icons-react';
+import { IconSun, IconMoon, IconSchool } from '@tabler/icons-react';
+import classes from '../../styles/Dashboard.module.css';
 
 export function Header({ apiHealth }) {
   const { setColorScheme } = useMantineColorScheme();
@@ -65,14 +66,14 @@ export function Header({ apiHealth }) {
   };
 
   return (
-    <Paper shadow="xs" p="md" withBorder style={{ borderRadius: 0, marginBottom: '1.5rem' }}>
+    <Paper shadow="xs" p="md" withBorder className={classes.headerPaper}>
       <Container size="xl">
         <Group justify="space-between" align="center" wrap="wrap">
           <Box>
-            <Group gap="xs" align="center">
-              <IconSchool size={28} color="var(--mantine-color-blue-6)" />
+            <Group gap="xs" align="center" wrap="nowrap">
+              <IconSchool size={28} color="var(--mantine-color-blue-6)" style={{ flexShrink: 0 }} />
               <div>
-                <Title order={2} style={{ letterSpacing: '-0.02em', fontSize: '1.45rem' }}>
+                <Title order={2} className={classes.headerTitle}>
                   Suite de Inferencia Estadística y Bondad de Ajuste
                 </Title>
                 <Text size="sm" c="dimmed">

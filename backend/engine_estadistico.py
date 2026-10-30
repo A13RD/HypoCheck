@@ -209,7 +209,7 @@ class MotorEstadistico:
         self,
         datos: Any,
         alpha: float = 0.05,
-        seed: Optional[int] = None,
+        seed: Optional[int] = 42,
         n_mc_samples: int = 9999,
     ) -> Dict[str, Any]:
         """
@@ -883,7 +883,7 @@ class MotorEstadistico:
                 "note": "Ambas muestras tienen varianza cero; las varianzas se consideran idénticas.",
             }
             t_res = {
-                "statistic": 0.0 if iguales else (float("inf") if mean_a > mean_b else -float("inf")),
+                "statistic": 0.0 if iguales else None,
                 "p_value": 1.0 if iguales else 0.0,
                 "method": "Student estándar (varianzas idénticas = 0)",
                 "equal_var": True,
@@ -1209,7 +1209,7 @@ class MotorEstadistico:
         self,
         datos: Any,
         alpha: float = 0.05,
-        seed: Optional[int] = None,
+        seed: Optional[int] = 42,
         n_mc_samples: int = 9999,
     ) -> Dict[str, Any]:
         """

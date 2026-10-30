@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Suspense, lazy } from 'react';
 import {
   Container,
   Tabs,
@@ -33,6 +33,7 @@ const VisualizationsTab = lazy(() =>
 
 import { checkApiHealth, analyzeGoodnessOfFit } from './services/api';
 import { PRESET_SCENARIOS } from './data/presets';
+import classes from './styles/Dashboard.module.css';
 
 export function App() {
   // Estado de conexión con la API
@@ -50,7 +51,10 @@ export function App() {
   const [analysisError, setAnalysisError] = useState(null);
   const [analysisResult, setAnalysisResult] = useState(null);
   const [analyzedSample, setAnalyzedSample] = useState(null);
+  const [analyzedAlpha, setAnalyzedAlpha] = useState(0.05);
   const [isStale, setIsStale] = useState(false);
+
+  const abortControllerRef = useRef(null);
 
   // Verificación periódica de salud de la API
   const pollHealth = useCallback(async () => {
@@ -65,7 +69,12 @@ export function App() {
   useEffect(() => {
     pollHealth();
     const interval = setInterval(pollHealth, 15000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
   }, [pollHealth]);
 
   // Manejo de selección de presets
@@ -98,6 +107,11 @@ export function App() {
   };
 
   const handleClear = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsAnalyzing(false);
     setRawInput('');
     setSelectedPresetId(null);
     setAnalysisResult(null);
@@ -108,32 +122,49 @@ export function App() {
 
   // Ejecución de análisis de bondad de ajuste con FastAPI
   const handleAnalyze = async (numbers) => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setIsAnalyzing(true);
     setAnalysisError(null);
 
     try {
-      const data = await analyzeGoodnessOfFit(numbers, alpha);
+      const data = await analyzeGoodnessOfFit(numbers, alpha, controller.signal);
+      if (abortControllerRef.current !== controller) return;
       setAnalysisResult(data);
       setAnalyzedSample(numbers);
+      setAnalyzedAlpha(alpha);
       setIsStale(false);
+      setApiHealth((prev) =>
+        prev?.available ? prev : { available: true, status: 'healthy', version: '1.0.0' }
+      );
     } catch (err) {
+      if (err.name === 'AbortError' || abortControllerRef.current !== controller) return;
       setAnalysisError(err.message || 'Error desconocido al procesar la muestra.');
+      if (err.status === null) {
+        setApiHealth({ available: false, status: 'offline', message: err.message });
+      }
     } finally {
-      setIsAnalyzing(false);
+      if (abortControllerRef.current === controller) {
+        setIsAnalyzing(false);
+      }
     }
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+    <div className={classes.appWrapper}>
       <Header apiHealth={apiHealth} />
 
-      <Container size="xl" style={{ flex: 1, width: '100%' }}>
+      <Container size="xl" className={classes.mainContainer}>
         <Tabs value={activeTab} onChange={setActiveTab} variant="outline" radius="md">
-          <Tabs.List mb="lg">
+          <Tabs.List mb="lg" className={classes.tabsList}>
             <Tabs.Tab
               value="analysis"
               leftSection={<IconChecklist size={16} />}
-              style={{ fontWeight: 500 }}
+              className={classes.tabItem}
             >
               Bondad de Ajuste y Normalidad
             </Tabs.Tab>
@@ -141,7 +172,7 @@ export function App() {
             <Tabs.Tab
               value="charts"
               leftSection={<IconChartBar size={16} />}
-              style={{ fontWeight: 500 }}
+              className={classes.tabItem}
             >
               Visualizaciones Estadísticas
               {analyzedSample && (
@@ -154,7 +185,7 @@ export function App() {
             <Tabs.Tab
               value="comparison"
               leftSection={<IconGitCompare size={16} />}
-              style={{ fontWeight: 500 }}
+              className={classes.tabItem}
             >
               Comparación de Dos Muestras
             </Tabs.Tab>
@@ -211,7 +242,7 @@ export function App() {
 
                   <GoodnessOfFitTable
                     goodnessOfFit={analysisResult.goodness_of_fit}
-                    alpha={alpha}
+                    alpha={analyzedAlpha}
                   />
 
                   <PedagogicalSynthesisCard
@@ -251,7 +282,7 @@ export function App() {
               SECCIÓN 3: COMPARACIÓN DE DOS MUESTRAS
              ========================================================================= */}
           <Tabs.Panel value="comparison">
-            <ComparisonTab />
+            <ComparisonTab onHealthUpdate={setApiHealth} />
           </Tabs.Panel>
         </Tabs>
       </Container>

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Stack,
   SimpleGrid,
@@ -33,10 +33,14 @@ import { compareIndependentSamples } from '../../services/api';
 
 function formatVal(val, decimals = 4) {
   if (val === null || val === undefined || Number.isNaN(val)) return 'N/D';
-  return Number(val).toFixed(decimals);
+  const num = Number(val);
+  if (num !== 0 && Math.abs(num) < Math.pow(10, -decimals)) {
+    return num.toExponential(3);
+  }
+  return num.toFixed(decimals);
 }
 
-export function ComparisonTab() {
+export function ComparisonTab({ onHealthUpdate }) {
   const [sampleAText, setSampleAText] = useState('');
   const [sampleBText, setSampleBText] = useState('');
   const [alpha, setAlpha] = useState(0.05);
@@ -44,7 +48,18 @@ export function ComparisonTab() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
+  const [analyzedAlpha, setAnalyzedAlpha] = useState(0.05);
   const [isStale, setIsStale] = useState(false);
+
+  const abortControllerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
 
   const parsedA = useMemo(() => parseSampleInput(sampleAText), [sampleAText]);
   const parsedB = useMemo(() => parseSampleInput(sampleBText), [sampleBText]);
@@ -57,10 +72,15 @@ export function ComparisonTab() {
     setSampleAText(PRESET_TWO_SAMPLES.sampleA.join(', '));
     setSampleBText(PRESET_TWO_SAMPLES.sampleB.join(', '));
     setError(null);
-    setIsStale(true);
+    if (result) setIsStale(true);
   };
 
   const handleClear = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsLoading(false);
     setSampleAText('');
     setSampleBText('');
     setResult(null);
@@ -86,17 +106,41 @@ export function ComparisonTab() {
   const handleCompare = async () => {
     if (!canCompare) return;
 
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setIsLoading(true);
     setError(null);
 
     try {
-      const data = await compareIndependentSamples(parsedA.numbers, parsedB.numbers, alpha);
+      const data = await compareIndependentSamples(
+        parsedA.numbers,
+        parsedB.numbers,
+        alpha,
+        controller.signal
+      );
+      if (abortControllerRef.current !== controller) return;
       setResult(data);
+      setAnalyzedAlpha(alpha);
       setIsStale(false);
+      if (onHealthUpdate) {
+        onHealthUpdate((prev) =>
+          prev?.available ? prev : { available: true, status: 'healthy', version: '1.0.0' }
+        );
+      }
     } catch (err) {
+      if (err.name === 'AbortError' || abortControllerRef.current !== controller) return;
       setError(err.message || 'Ocurrió un error al procesar la comparación de muestras.');
+      if (err.status === null && onHealthUpdate) {
+        onHealthUpdate({ available: false, status: 'offline', message: err.message });
+      }
     } finally {
-      setIsLoading(false);
+      if (abortControllerRef.current === controller) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -259,6 +303,20 @@ export function ComparisonTab() {
       {/* Resultados de la comparación */}
       {result && (
         <Stack gap="md">
+          <Group justify="space-between" align="center" wrap="wrap">
+            <Group gap="xs">
+              <Badge color="blue" variant="light" size="md">
+                Grupo A: n = {result.sample_sizes?.sample_a}
+              </Badge>
+              <Badge color="indigo" variant="light" size="md">
+                Grupo B: n = {result.sample_sizes?.sample_b}
+              </Badge>
+            </Group>
+            <Badge variant="outline" color="blue">
+              Nivel evaluado: α = {analyzedAlpha}
+            </Badge>
+          </Group>
+
           <SimpleGrid cols={{ base: 1, md: 3 }} spacing="md">
             {/* 1. Levene */}
             <Paper withBorder p="md" radius="md" className="stat-card">
@@ -363,7 +421,7 @@ export function ComparisonTab() {
                     size="xs"
                     ff="monospace"
                     fw={700}
-                    c={result.student_t.p_value < alpha ? 'red' : 'teal'}
+                    c={result.student_t.p_value < analyzedAlpha ? 'red' : 'teal'}
                   >
                     {formatVal(result.student_t.p_value)}
                   </Text>
@@ -371,7 +429,7 @@ export function ComparisonTab() {
 
                 <Group justify="space-between" align="center" mt="xs">
                   <Text size="xs" fw={600}>
-                    Decisión (α = {alpha}):
+                    Decisión (α = {analyzedAlpha}):
                   </Text>
                   <Badge
                     color={result.student_t.rejected ? 'red' : 'teal'}
@@ -427,7 +485,7 @@ export function ComparisonTab() {
                     size="xs"
                     ff="monospace"
                     fw={700}
-                    c={result.mann_whitney_u.p_value < alpha ? 'red' : 'teal'}
+                    c={result.mann_whitney_u.p_value < analyzedAlpha ? 'red' : 'teal'}
                   >
                     {formatVal(result.mann_whitney_u.p_value)}
                   </Text>
@@ -435,7 +493,7 @@ export function ComparisonTab() {
 
                 <Group justify="space-between" align="center" mt="xs">
                   <Text size="xs" fw={600}>
-                    Decisión (α = {alpha}):
+                    Decisión (α = {analyzedAlpha}):
                   </Text>
                   <Badge
                     color={result.mann_whitney_u.rejected ? 'red' : 'teal'}
@@ -485,9 +543,9 @@ export function ComparisonTab() {
                 title="Directrices para la sustentación sobre dos muestras"
               >
                 <Text size="xs" c="dimmed">
-                  1. <strong>Levene no evalúa normalidad</strong>: únicamente evalúa si las varianzas poblacionales son homogéneas ($H_0: \sigma_1^2 = \sigma_2^2$).
+                  1. <strong>Levene no evalúa normalidad</strong>: únicamente evalúa si las varianzas poblacionales son homogéneas (H₀: σ₁² = σ₂²).
                   <br />
-                  2. <strong>Selección t vs. Welch</strong>: si Levene rechaza la igualdad de varianzas, se selecciona la prueba $t$ de Welch; no es correcto saltar a Mann-Whitney únicamente por heterocedasticidad si la normalidad se cumple.
+                  2. <strong>Selección t vs. Welch</strong>: si Levene rechaza la igualdad de varianzas, se selecciona la prueba t de Welch; no es correcto saltar a Mann-Whitney únicamente por heterocedasticidad si la normalidad se cumple.
                   <br />
                   3. <strong>Alcance de Mann-Whitney</strong>: contrasta la distribución de rangos (dominancia estocástica). Sólo puede interpretarse como prueba estricta de medianas si se asume que ambas distribuciones tienen exactamente la misma forma geométrica.
                 </Text>

@@ -516,6 +516,74 @@ class TestAPIIntegracion(unittest.TestCase):
             places=9,
         )
 
+    # -------------------------------------------------------------------------
+    # 23. Verificación de los escenarios precargados del frontend y muestras constantes
+    # -------------------------------------------------------------------------
+    def test_23_escenarios_precargados_frontend_y_muestras_constantes(self) -> None:
+        """Valida los tres escenarios deterministas del frontend y la comparación de muestras constantes."""
+        ecommerce = [
+            124.5, 132.1, 128.4, 145.2, 138.9, 152.0, 130.8, 141.5, 127.3, 135.6,
+            148.2, 160.4, 142.7, 136.9, 155.1, 149.3, 162.8, 158.4, 170.2, 165.5,
+            185.0, 192.4, 178.6, 210.3, 225.8, 240.1, 265.4, 280.9, 310.5, 345.2,
+            390.0, 420.5, 480.2, 530.8, 620.1, 750.4, 890.2, 1120.5, 1340.0, 1580.6,
+        ]
+        rubric_normal = [
+            151.21, 182.22, 118.11, 216.87, 194.15, 166.24, 165.64, 184.12, 166.97, 168.22,
+            196.60, 190.44, 173.08, 172.44, 179.83, 156.58, 162.89, 191.45, 171.09, 133.77,
+            160.68, 194.70, 168.03, 170.54, 194.26, 229.74, 153.60, 215.45, 138.10, 180.25,
+            139.91, 215.54, 200.02, 209.13, 148.43, 195.54, 159.43, 161.28, 190.20, 201.30,
+            181.13, 156.16, 150.23, 218.33, 192.82, 196.59, 240.50, 150.52, 251.78, 269.53,
+            223.55, 199.81, 155.09, 204.83, 161.72, 174.35, 166.29, 183.51, 213.64, 158.33,
+        ]
+        rubric_gamma = [
+            35.24, 36.25, 39.65, 63.50, 23.36, 6.95, 767.36, 357.50, 109.79, 405.23,
+            481.21, 138.17, 189.38, 57.57, 43.51, 230.61, 147.07, 83.58, 30.88, 3.48,
+            312.20, 438.76, 124.98, 210.63, 47.09, 146.69, 126.24, 28.80, 311.87, 357.09,
+            56.17, 258.76, 161.96, 94.45, 2.58, 281.07, 76.51, 287.73, 34.88, 477.53,
+            143.11, 37.42, 488.57, 125.93, 29.16, 115.89, 288.30, 76.41, 212.45, 237.49,
+            310.35, 969.43, 274.17, 41.79, 186.07, 56.63, 43.03, 447.83, 136.15, 362.04,
+        ]
+
+        # Escenario 1: E-Commerce (asimétrico, rechaza en K-S, A-D, S-W)
+        res_ec = self.client.post("/api/v1/goodness-of-fit", json={"data": ecommerce, "alpha": 0.05})
+        self.assertEqual(res_ec.status_code, 200)
+        ec_json = res_ec.json()
+        self.assertEqual(ec_json["descriptive_metrics"]["n"], 40)
+        self.assertTrue(ec_json["goodness_of_fit"]["kolmogorov_smirnov"]["rejected"])
+        self.assertTrue(ec_json["goodness_of_fit"]["anderson_darling"]["rejected"])
+        self.assertTrue(ec_json["goodness_of_fit"]["shapiro_wilk"]["rejected"])
+
+        # Escenario 2: Normal (n=60, no rechaza en las 4 pruebas, Chi-cuadrada disponible)
+        res_norm = self.client.post("/api/v1/goodness-of-fit", json={"data": rubric_normal, "alpha": 0.05})
+        self.assertEqual(res_norm.status_code, 200)
+        norm_json = res_norm.json()
+        self.assertEqual(norm_json["descriptive_metrics"]["n"], 60)
+        self.assertFalse(norm_json["goodness_of_fit"]["kolmogorov_smirnov"]["rejected"])
+        self.assertFalse(norm_json["goodness_of_fit"]["anderson_darling"]["rejected"])
+        self.assertFalse(norm_json["goodness_of_fit"]["shapiro_wilk"]["rejected"])
+        self.assertTrue(norm_json["goodness_of_fit"]["chi_square"]["available"])
+        self.assertFalse(norm_json["goodness_of_fit"]["chi_square"]["rejected"])
+
+        # Escenario 3: Gamma (n=60, todos positivos, rechaza en K-S, A-D, S-W)
+        self.assertTrue(all(x > 0 for x in rubric_gamma))
+        res_gam = self.client.post("/api/v1/goodness-of-fit", json={"data": rubric_gamma, "alpha": 0.05})
+        self.assertEqual(res_gam.status_code, 200)
+        gam_json = res_gam.json()
+        self.assertEqual(gam_json["descriptive_metrics"]["n"], 60)
+        self.assertTrue(gam_json["goodness_of_fit"]["kolmogorov_smirnov"]["rejected"])
+        self.assertTrue(gam_json["goodness_of_fit"]["anderson_darling"]["rejected"])
+        self.assertTrue(gam_json["goodness_of_fit"]["shapiro_wilk"]["rejected"])
+
+        # Comparación de dos muestras constantes distintas (sin error de serialización JSON por inf)
+        res_const = self.client.post(
+            "/api/v1/compare-samples",
+            json={"sample_a": [5.0] * 6, "sample_b": [10.0] * 6, "alpha": 0.05},
+        )
+        self.assertEqual(res_const.status_code, 200)
+        const_json = res_const.json()
+        self.assertTrue(const_json["student_t"]["rejected"])
+        self.assertIsNone(const_json["student_t"]["statistic"])
+
 
 if __name__ == "__main__":
     unittest.main()

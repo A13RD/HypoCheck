@@ -366,10 +366,15 @@ class TestMotorEstadistico(unittest.TestCase):
         self.assertFalse(res_chi["available"])
         self.assertIn("desviación estándar igual a cero", res_chi["reason"])
 
-        # Comparar muestras con dos grupos constantes
+        # Comparar muestras con dos grupos constantes iguales y distintos
         comp_const = self.motor.comparar_muestras(constante, [5.0] * 6)
         self.assertFalse(comp_const["t_test"]["rejected"])
         self.assertFalse(math.isnan(comp_const["levene"]["statistic"]))
+
+        comp_const_diff = self.motor.comparar_muestras(constante, [10.0] * 6)
+        self.assertTrue(comp_const_diff["t_test"]["rejected"])
+        self.assertIsNone(comp_const_diff["t_test"]["statistic"])
+        self.assertEqual(comp_const_diff["t_test"]["p_value"], 0.0)
 
     # -------------------------------------------------------------------------
     # 16. Validación de nivel de significancia y síntesis pedagógica
