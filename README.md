@@ -239,3 +239,4 @@ npm run preview
    - La prueba de **Levene** evalúa igualdad de varianzas (homocedasticidad), **no normalidad**.
    - El rechazo de Levene conduce al uso de la prueba **$t$ de Welch** para varianzas desiguales, no necesariamente al descarte del enfoque paramétrico.
    - La prueba **$U$ de Mann-Whitney** evalúa dominancia estocástica (diferencia en la distribución de rangos); solo equivale a una comparación estricta de medianas cuando ambas distribuciones tienen idéntica forma y dispersión.
+
