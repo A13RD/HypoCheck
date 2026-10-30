@@ -141,6 +141,19 @@ class AndersonDarlingResponse(BaseModel):
     p_value: Optional[float] = Field(None, description="Valor-p (reportado como null respetando el contrato original).")
 
 
+class ShapiroWilkResponse(BaseModel):
+    """Resultado de la prueba de normalidad de Shapiro-Wilk."""
+    available: bool = Field(default=True, description="Indica si la prueba se ejecutó satisfactoriamente.")
+    statistic: Optional[float] = Field(None, description="Estadístico de prueba W de Shapiro-Wilk.")
+    p_value: Optional[float] = Field(None, description="Valor-p de la prueba Shapiro-Wilk.")
+    alpha: float = Field(..., description="Nivel de significancia evaluado.")
+    rejected: Optional[bool] = Field(None, description="Indica si se rechaza H0 al nivel alpha (p < alpha).")
+    method: str = Field(default="Shapiro-Wilk", description="Nombre del método estadístico.")
+    warnings: List[str] = Field(default_factory=list, description="Advertencias estadísticas asociadas al cálculo.")
+    academic_verdict: str = Field(..., description="Interpretación pedagógica y académica del resultado.")
+    reason: Optional[str] = Field(None, description="Motivo en caso de que la prueba no esté disponible.")
+
+
 class ChiSquareResponse(BaseModel):
     """Resultado de la prueba Chi-cuadrada de bondad de ajuste con fusión de clases."""
     available: bool = Field(..., description="Indica si la prueba pudo ejecutarse válidamente.")
@@ -157,9 +170,10 @@ class ChiSquareResponse(BaseModel):
 
 
 class GoodnessOfFitContainer(BaseModel):
-    """Contenedor de las tres pruebas de bondad de ajuste."""
+    """Contenedor de las cuatro pruebas de bondad de ajuste."""
     kolmogorov_smirnov: KolmogorovSmirnovResponse
     anderson_darling: AndersonDarlingResponse
+    shapiro_wilk: ShapiroWilkResponse
     chi_square: ChiSquareResponse
 
 

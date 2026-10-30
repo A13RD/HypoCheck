@@ -31,6 +31,7 @@ try:
         DescriptiveMetricsResponse,
         KolmogorovSmirnovResponse,
         AndersonDarlingResponse,
+        ShapiroWilkResponse,
         ChiSquareResponse,
         CompareSamplesRequest,
         CompareSamplesResponse,
@@ -52,6 +53,7 @@ except ImportError:
         DescriptiveMetricsResponse,
         KolmogorovSmirnovResponse,
         AndersonDarlingResponse,
+        ShapiroWilkResponse,
         ChiSquareResponse,
         CompareSamplesRequest,
         CompareSamplesResponse,
@@ -189,20 +191,20 @@ def health_check() -> Dict[str, str]:
     tags=["Estadística"],
     summary="Análisis de bondad de ajuste a la distribución normal",
     description=(
-        "Ejecuta el análisis estadístico descriptivo y las tres pruebas de bondad de ajuste "
+        "Ejecuta el análisis estadístico descriptivo y las cuatro pruebas de bondad de ajuste "
         "(Kolmogorov-Smirnov con p-valor calibrado por Lilliefors Monte Carlo, Anderson-Darling "
-        "con valores críticos dinámicos, y Chi-cuadrada de Pearson con fusión de clases Ei >= 5), "
+        "con valores críticos dinámicos, Shapiro-Wilk y Chi-cuadrada de Pearson con fusión de clases Ei >= 5), "
         "generando además una síntesis pedagógica integral."
     ),
 )
 def goodness_of_fit_endpoint(solicitud: GoodnessOfFitRequest) -> GoodnessOfFitResponse:
     """
-    Controlador para el análisis de bondad de ajuste.
+    Controlador para el análisis de bondad de ajuste con cuatro pruebas.
     """
     datos = solicitud.data
     alpha = solicitud.alpha
 
-    logger.info("Procesando bondad de ajuste: n=%d, alpha=%.4f", len(datos), alpha)
+    logger.info("Procesando bondad de ajuste (4 pruebas): n=%d, alpha=%.4f", len(datos), alpha)
 
     # 1. Medidas descriptivas
     metricas = motor_estadistico.calcular_metricas_descriptivas(datos)
@@ -213,11 +215,33 @@ def goodness_of_fit_endpoint(solicitud: GoodnessOfFitRequest) -> GoodnessOfFitRe
     # 3. Anderson-Darling
     ad = motor_estadistico.prueba_anderson_darling_normal(datos, alpha=alpha)
 
-    # 4. Chi-cuadrada de Pearson (puede resultar en available=False sin generar error HTTP)
+    # 4. Shapiro-Wilk
+    try:
+        sw = motor_estadistico.prueba_shapiro_wilk_normal(datos, alpha=alpha)
+    except DatosInvalidosError as exc:
+        logger.warning("Prueba Shapiro-Wilk no disponible para la muestra: %s", exc)
+        sw = {
+            "available": False,
+            "statistic": None,
+            "p_value": None,
+            "alpha": alpha,
+            "rejected": None,
+            "method": "Shapiro-Wilk",
+            "warnings": [],
+            "academic_verdict": f"Prueba Shapiro-Wilk no disponible: {exc}",
+            "reason": str(exc),
+        }
+
+    # 5. Chi-cuadrada de Pearson (puede resultar en available=False sin generar error HTTP)
     chi2 = motor_estadistico.prueba_chi_cuadrada_normal(datos, alpha=alpha)
 
-    # 5. Síntesis pedagógica
-    sintesis = motor_estadistico.generar_sintesis_pedagogica(ks, ad, chi2)
+    # 6. Síntesis pedagógica
+    sintesis = motor_estadistico.generar_sintesis_pedagogica(
+        resultados_ks=ks,
+        resultados_ad=ad,
+        resultados_sw=sw,
+        resultados_chi2=chi2,
+    )
 
     return GoodnessOfFitResponse(
         descriptive_metrics=DescriptiveMetricsResponse(
@@ -245,6 +269,17 @@ def goodness_of_fit_endpoint(solicitud: GoodnessOfFitRequest) -> GoodnessOfFitRe
                 significance_level=ad.get("significance_level"),
                 alpha=ad.get("alpha"),
                 p_value=ad.get("p_value"),
+            ),
+            shapiro_wilk=ShapiroWilkResponse(
+                available=sw.get("available", True),
+                statistic=sw.get("statistic"),
+                p_value=sw.get("p_value"),
+                alpha=sw["alpha"],
+                rejected=sw.get("rejected"),
+                method=sw.get("method", "Shapiro-Wilk"),
+                warnings=sw.get("warnings", []),
+                academic_verdict=sw["academic_verdict"],
+                reason=sw.get("reason"),
             ),
             chi_square=ChiSquareResponse(
                 available=chi2["available"],

@@ -409,7 +409,107 @@ class MotorEstadistico:
         }
 
     # -------------------------------------------------------------------------
-    # E. Chi-cuadrada de Pearson
+    # E. Shapiro-Wilk
+    # -------------------------------------------------------------------------
+
+    def prueba_shapiro_wilk_normal(
+        self,
+        datos: Any,
+        alpha: float = 0.05,
+    ) -> Dict[str, Any]:
+        """
+        Ejecuta la prueba de Shapiro-Wilk para contrastar normalidad.
+
+        La prueba de Shapiro-Wilk evalúa la correlación entre los estadísticos de orden
+        observados y las puntuaciones normales teóricas esperadas. Es considerada una de las
+        pruebas más potentes para contrastar normalidad frente a una amplia gama de alternativas.
+
+        Hipótesis:
+        - H0: La muestra proviene de una población con distribución normal.
+        - Ha: La muestra no proviene de una distribución normal.
+
+        Regla de decisión:
+        - Si valor-p < alpha: se rechaza H0 en favor de Ha.
+        - Si valor-p >= alpha: no se rechaza H0.
+
+        Consideraciones:
+        - Requiere al menos 3 observaciones unidimensionales y finitas.
+        - Rechaza muestras constantes (desviación estándar igual a cero).
+        - Si N > 5000 observaciones, registra una advertencia explícita sobre las limitaciones
+          documentadas por SciPy en la precisión del valor-p para dicho tamaño.
+        - No inventa valores críticos tabulados (la decisión formal se basa en el p-valor exacto).
+
+        Args:
+            datos: Muestra numérica unidimensional.
+            alpha: Nivel de significancia (0 < alpha < 1, por defecto 0.05).
+
+        Returns:
+            Dict[str, Any]: Resultados estructurados de la prueba de Shapiro-Wilk.
+
+        Raises:
+            DatosInvalidosError: Si la muestra tiene menos de 3 observaciones, es constante o contiene NaN/infinitos.
+            ParametroInvalidoError: Si alpha no es válido.
+        """
+        arr = self._validar_datos(datos, min_tamano=3)
+        alpha_val = self._validar_alpha(alpha)
+
+        std_muestral = float(np.std(arr, ddof=1))
+        if math.isclose(std_muestral, 0.0, abs_tol=1e-12):
+            raise DatosInvalidosError(
+                "La muestra presenta dispersión nula (desviación estándar igual a cero). "
+                "No es posible realizar una evaluación informativa de normalidad con Shapiro-Wilk."
+            )
+
+        warnings_list: List[str] = []
+        if arr.size > 5000:
+            warnings_list.append(
+                "SciPy documenta que para muestras con N > 5000 observaciones, "
+                "el cálculo del valor-p en la prueba de Shapiro-Wilk puede presentar limitaciones en su precisión numérica."
+            )
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning)
+            res = stats.shapiro(arr)
+
+        statistic = float(res.statistic)
+        p_value = float(res.pvalue)
+        rejected = bool(p_value < alpha_val)
+
+        decision_str = "Se rechaza H0" if rejected else "No se rechaza H0"
+        academic_verdict = (
+            f"Prueba de normalidad de Shapiro-Wilk:\n"
+            f"- Estadístico W = {statistic:.5f}\n"
+            f"- Valor-p = {p_value:.5f}\n"
+            f"- Nivel de significancia alpha = {alpha_val:.4f}\n"
+            f"- Decisión (p-valor {'<' if rejected else '>='} alpha): {decision_str}.\n"
+            f"- Hipótesis: H0 (la muestra proviene de una distribución normal) vs. Ha (no proviene de una distribución normal).\n"
+            + (
+                f"Existe evidencia estadística suficiente al nivel de significancia {alpha_val:.2%} "
+                f"para concluir que los datos observados difieren significativamente de una distribución normal."
+                if rejected
+                else (
+                    f"No existe evidencia estadística suficiente al nivel de significancia {alpha_val:.2%} "
+                    f"para descartar la hipótesis de normalidad. "
+                    f"Nota pedagógica: La ausencia de rechazo indica compatibilidad empírica con el modelo normal, "
+                    f"pero NO constituye una demostración matemática de que la población sea estrictamente normal."
+                )
+            )
+        )
+
+        return {
+            "available": True,
+            "statistic": statistic,
+            "p_value": p_value,
+            "alpha": alpha_val,
+            "rejected": rejected,
+            "method": "Shapiro-Wilk",
+            "warnings": warnings_list,
+            "academic_verdict": academic_verdict,
+            "reason": None,
+        }
+
+    # -------------------------------------------------------------------------
+    # F. Chi-cuadrada de Pearson
     # -------------------------------------------------------------------------
 
     def _determinar_k_inicial(self, n: int) -> int:
@@ -900,56 +1000,92 @@ class MotorEstadistico:
         }
 
     # -------------------------------------------------------------------------
-    # G. Síntesis pedagógica
+    # H. Síntesis pedagógica
     # -------------------------------------------------------------------------
 
     def generar_sintesis_pedagogica(
         self,
         resultados_ks: Dict[str, Any],
         resultados_ad: Dict[str, Any],
-        resultados_chi2: Dict[str, Any],
+        resultados_sw: Optional[Dict[str, Any]] = None,
+        resultados_chi2: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Genera una síntesis académica e interpretativa integral a partir de los resultados
-        de las pruebas de bondad de ajuste de Kolmogorov-Smirnov, Anderson-Darling y Chi-cuadrada.
+        de las pruebas de bondad de ajuste de Kolmogorov-Smirnov, Anderson-Darling, Shapiro-Wilk
+        y Chi-cuadrada de Pearson.
 
         Contempla:
-        1. Definición formal de la hipótesis nula (H0) y alternativa (H1).
-        2. Criterio del valor-p frente al nivel de significancia alpha.
+        1. Definición formal de la hipótesis nula (H0) y alternativa (Ha).
+        2. Criterio del valor-p y estadísticos frente al nivel de significancia alpha evaluado.
         3. Claridad epistemológica: no rechazar H0 no equivale a demostrar que H0 es verdadera.
-        4. Comparación de sensibilidades: sensibilidad central de K-S vs. ponderación de colas en A-D.
-        5. Estado y diagnóstico de la prueba Chi-cuadrada y cumplimiento de la condición Ei >= 5.
+        4. Comparación de sensibilidades funcionales y matemáticas de las cuatro pruebas:
+           - Kolmogorov-Smirnov: distancia suprema, mayor sensibilidad en la región central.
+           - Anderson-Darling: ponderación cuadrática con máxima sensibilidad en colas y valores extremos.
+           - Shapiro-Wilk: correlación entre estadísticos de orden y cuantiles teóricos normales.
+           - Chi-cuadrada de Pearson: discrepancia en frecuencias por intervalos disjuntos.
+        5. Diagnóstico de pruebas no disponibles (e.g. Chi-cuadrada si v <= 0).
+        6. Dictamen académico global fundamentado: contraste riguroso sin votaciones por mayoría.
 
         Args:
             resultados_ks: Diccionario devuelto por prueba_kolmogorov_smirnov_normal.
             resultados_ad: Diccionario devuelto por prueba_anderson_darling_normal.
-            resultados_chi2: Diccionario devuelto por prueba_chi_cuadrada_normal.
+            resultados_sw: Diccionario devuelto por prueba_shapiro_wilk_normal (opcional para compatibilidad).
+            resultados_chi2: Diccionario devuelto por prueba_chi_cuadrada_normal (opcional para compatibilidad).
 
         Returns:
             str: Texto estructurado con la síntesis pedagógica detallada.
         """
+        # Manejo de compatibilidad regresiva si se invoca con 3 argumentos posicionales (ks, ad, chi2)
+        if resultados_sw is not None and resultados_chi2 is None:
+            if (
+                "chi_square" in resultados_sw
+                or "initial_classes_count" in resultados_sw
+                or "degrees_of_freedom" in resultados_sw
+                or resultados_sw.get("available") is False
+            ):
+                resultados_chi2 = resultados_sw
+                resultados_sw = None
+
+        if resultados_chi2 is None:
+            resultados_chi2 = {}
+        if resultados_sw is None:
+            resultados_sw = {}
+
+        # Determinar el alpha de referencia de las pruebas disponibles
+        alpha_ref = (
+            resultados_ks.get("alpha")
+            or resultados_ad.get("alpha")
+            or resultados_sw.get("alpha")
+            or resultados_chi2.get("alpha")
+            or 0.05
+        )
+
         lineas: List[str] = []
 
         lineas.append("=== SÍNTESIS PEDAGÓGICA Y ANÁLISIS DE BONDAD DE AJUSTE A LA DISTRIBUCIÓN NORMAL ===")
         lineas.append("")
         lineas.append("1. Marco de Hipótesis:")
         lineas.append("   - H0 (Hipótesis Nula): La muestra proviene de una población con distribución normal.")
-        lineas.append("   - H1 (Hipótesis Alternativa): La muestra proviene de una población con distribución no normal.")
+        lineas.append("   - Ha (Hipótesis Alternativa): La muestra proviene de una población con distribución no normal.")
         lineas.append("")
         lineas.append("2. Criterio de Decisión y Significado del Valor-p:")
-        lineas.append("   - Si valor-p < alpha: Los datos observados son altamente improbables bajo H0; por tanto, se rechaza H0.")
-        lineas.append("   - Si valor-p >= alpha: No existe evidencia suficiente para descartar H0.")
+        lineas.append(f"   - Nivel de significancia evaluado: alpha = {alpha_ref:.4f} ({alpha_ref:.2%}).")
+        lineas.append("   - En pruebas con valor-p (K-S, Shapiro-Wilk, Chi-cuadrada): rechazar H0 si valor-p < alpha.")
+        lineas.append("   - En Anderson-Darling: rechazar H0 si el estadístico A^2 supera el valor crítico tabulado.")
         lineas.append("   - IMPORTANTE (Principio Epistemológico): No rechazar H0 NUNCA demuestra que los datos sean")
-        lineas.append("     estrictamente normales. Significa únicamente que no se detectaron desviaciones estadísticamente")
-        lineas.append("     significativas con la muestra y el nivel de significancia analizados.")
+        lineas.append("     estrictamente normales. Significa únicamente que no se detectaron apartamientos estadísticamente")
+        lineas.append("     significativos con la muestra y el nivel de significancia analizados.")
         lineas.append("")
 
-        lineas.append("3. Comparación Metodológica de Sensibilidad:")
+        lineas.append("3. Comparación Metodológica de Sensibilidades:")
         lineas.append("   - Kolmogorov-Smirnov (K-S con Lilliefors): Cuantifica la máxima discrepancia vertical D entre")
         lineas.append("     la distribución empírica y la teórica acumulada. Presenta mayor sensibilidad alrededor del centro")
         lineas.append("     (mediana) de la distribución.")
         lineas.append("   - Anderson-Darling (A-D): Pondera de forma cuadrática las discrepancias dividiendo por la varianza")
         lineas.append("     teórica en cada punto, otorgando un peso sustancialmente superior a las colas (extremos de la distribución).")
+        lineas.append("   - Shapiro-Wilk (S-W): Evalúa la linealidad y correlación entre los estadísticos de orden observados")
+        lineas.append("     y las puntuaciones normales esperadas. Posee la mayor potencia omnibus ante asimetría y curtosis.")
         lineas.append("   - Chi-cuadrada de Pearson: Evalúa el ajuste discretizado en clases disjuntas que cubren todo el soporte (-inf, +inf).")
         lineas.append("")
 
@@ -978,6 +1114,22 @@ class MotorEstadistico:
         else:
             lineas.append("   [A-D] No disponible o datos no calculados.")
 
+        # Diagnóstico Shapiro-Wilk
+        sw_disp = resultados_sw.get("available", bool(resultados_sw))
+        sw_stat = resultados_sw.get("statistic")
+        sw_p = resultados_sw.get("p_value")
+        sw_rej = resultados_sw.get("rejected")
+        if sw_disp and sw_stat is not None and sw_p is not None:
+            lineas.append(
+                f"   [S-W] Estadístico W = {sw_stat:.5f}, p-valor = {sw_p:.5f}. "
+                f"Decisión: {'Rechaza normalidad' if sw_rej else 'No rechaza normalidad'}."
+            )
+        elif not sw_disp:
+            motivo_sw = resultados_sw.get("reason", "Condiciones estadísticas no cumplidas.")
+            lineas.append(f"   [S-W] PRUEBA NO DISPONIBLE: {motivo_sw}")
+        else:
+            lineas.append("   [S-W] No evaluada en esta ejecución.")
+
         # Diagnóstico Chi-cuadrada
         chi2_disp = resultados_chi2.get("available", False)
         if chi2_disp:
@@ -993,42 +1145,64 @@ class MotorEstadistico:
                 f"Decisión: {'Rechaza normalidad' if chi2_rej else 'No rechaza normalidad'}."
             )
         else:
-            motivo = resultados_chi2.get("reason", "Condiciones estadísticas no cumplidas.")
-            lineas.append(
-                f"   [Chi2] PRUEBA NO APLICABLE: {motivo}"
-            )
+            motivo_chi2 = resultados_chi2.get("reason", "Condiciones estadísticas no cumplidas.")
+            lineas.append(f"   [Chi2] PRUEBA NO APLICABLE: {motivo_chi2}")
 
         lineas.append("")
         lineas.append("5. Dictamen Académico Global:")
-        rechazos = sum(
-            1 for r in [ks_rej, ad_rej, (chi2_rej if chi2_disp else None)] if r is True
-        )
-        total_evaluadas = 2 + (1 if chi2_disp else 0)
 
-        if rechazos == total_evaluadas:
+        # Construcción rigurosa sin votación por mayoría
+        decisiones_map: Dict[str, bool] = {}
+        if ks_rej is not None:
+            decisiones_map["Kolmogorov-Smirnov"] = ks_rej
+        if ad_rej is not None:
+            decisiones_map["Anderson-Darling"] = ad_rej
+        if sw_disp and sw_rej is not None:
+            decisiones_map["Shapiro-Wilk"] = sw_rej
+        if chi2_disp and chi2_rej is not None:
+            decisiones_map["Chi-cuadrada"] = chi2_rej
+
+        pruebas_rechazan = [nombre for nombre, rej in decisiones_map.items() if rej is True]
+        pruebas_no_rechazan = [nombre for nombre, rej in decisiones_map.items() if rej is False]
+
+        if not decisiones_map:
+            lineas.append("   No hay pruebas estadísticas disponibles para emitir un dictamen global.")
+        elif len(pruebas_rechazan) == len(decisiones_map):
             lineas.append(
-                "   Conclusión: Todas las pruebas ejecutadas rechazan concordantemente la hipótesis nula de normalidad. "
-                "Existe fuerte evidencia en el centro y en las colas de que la muestra proviene de un modelo no normal. "
-                "Se aconseja emplear métodos no paramétricos o transformaciones de variable (e.g. Box-Cox)."
+                f"   Conclusión de concordancia: Todas las pruebas ejecutadas coinciden en rechazar la hipótesis "
+                f"nula de normalidad al nivel de significancia alpha = {alpha_ref:.2%}. Existe evidencia estadística "
+                f"consistente en los estadísticos de orden (Shapiro-Wilk), en las colas (Anderson-Darling) y en la región "
+                f"central (K-S) de que la muestra no proviene de un modelo normal. Se recomienda emplear métodos inferenciales "
+                f"no paramétricos o transformaciones de variable (e.g. Box-Cox)."
             )
-        elif rechazos == 0:
+        elif len(pruebas_no_rechazan) == len(decisiones_map):
             lineas.append(
-                "   Conclusión: Ninguna de las pruebas de bondad de ajuste rechaza la hipótesis nula de normalidad. "
-                "La muestra es plenamente compatible con el modelo normal tanto en la región central como en sus colas. "
-                "Es razonable continuar con procedimientos inferenciales clásicos basados en normalidad."
+                f"   Conclusión de concordancia: Ninguna de las pruebas de bondad de ajuste rechaza la hipótesis nula de "
+                f"normalidad al nivel de significancia alpha = {alpha_ref:.2%}. La muestra es plenamente compatible con el "
+                f"modelo normal a lo largo de todo su soporte. Es metodológicamente razonable continuar con procedimientos "
+                f"inferenciales paramétricos clásicos. Recordatorio metodológico: no rechazar H0 no demuestra que la población "
+                f"sea estrictamente normal, sino la ausencia de apartamientos detectables con la muestra disponible."
             )
         else:
             lineas.append(
-                f"   Conclusión: Se observan discrepancias entre las pruebas ({rechazos} de {total_evaluadas} rechazan normalidad). "
-                "Esto es habitual cuando la desviación de normalidad se concentra específicamente en colas pesadas/ligeras "
-                "(detectadas por Anderson-Darling pero no por K-S) o por efectos del agrupamiento en Chi-cuadrada. "
-                "Se recomienda inspeccionar visualmente los datos y considerar el contexto del fenómeno de ingeniería."
+                f"   Conclusión ante discrepancias entre pruebas (al nivel alpha = {alpha_ref:.2%}):\n"
+                f"   - Pruebas que rechazan normalidad: {', '.join(pruebas_rechazan)}.\n"
+                f"   - Pruebas que no rechazan normalidad: {', '.join(pruebas_no_rechazan)}.\n"
+                f"   Consideración estadística: En la inferencia científica rigurosa NO se aplican votaciones por mayoría. "
+                f"Las discrepancias obedecen a las naturalezas matemáticas y sensibilidades funcionales disímiles de cada contraste:\n"
+                f"     * Shapiro-Wilk es especialmente sensible a desviaciones de asimetría y curtosis en muestras pequeñas y moderadas.\n"
+                f"     * Anderson-Darling penaliza fuertemente las discrepancias en las colas extremas (posibles valores atípicos).\n"
+                f"     * Kolmogorov-Smirnov mide solo la máxima separación vertical y tiene menor potencia ante anomalías en colas.\n"
+                f"     * Chi-cuadrada depende del agrupamiento en clases y la discretización de la muestra.\n"
+                f"   Dictamen de ingeniería: La decisión sobre asumir normalidad debe fundamentarse en la prueba más "
+                f"relevante para el fenómeno físico analizado (e.g. Anderson-Darling si el riesgo reside en eventos extremos), "
+                f"complementando con el análisis visual (gráfico Q-Q) y evaluando la robustez del método inferencial posterior."
             )
 
         return "\n".join(lineas)
 
     # -------------------------------------------------------------------------
-    # H. Flujo unificado de bondad de ajuste
+    # I. Flujo unificado de bondad de ajuste
     # -------------------------------------------------------------------------
 
     def analizar_bondad_ajuste_completa(
@@ -1039,17 +1213,17 @@ class MotorEstadistico:
         n_mc_samples: int = 9999,
     ) -> Dict[str, Any]:
         """
-        Ejecuta el conjunto completo de análisis descriptivo, pruebas de bondad de ajuste
-        y síntesis pedagógica sobre una muestra numérica.
+        Ejecuta el conjunto completo de análisis descriptivo, las cuatro pruebas de bondad
+        de ajuste (K-S, Anderson-Darling, Shapiro-Wilk, Chi-cuadrada) y la síntesis pedagógica.
 
         Args:
             datos: Muestra numérica a evaluar.
-            alpha: Nivel de significancia (0.01, 0.05, 0.10).
+            alpha: Nivel de significancia (0 < alpha < 1).
             seed: Semilla para reproducibilidad de Monte Carlo en K-S.
             n_mc_samples: Número de réplicas Monte Carlo para K-S.
 
         Returns:
-            Dict[str, Any]: Estructura consolidada lista para serialización JSON.
+            Dict[str, Any]: Estructura consolidada con las cuatro pruebas y la síntesis.
         """
         metricas = self.calcular_metricas_descriptivas(datos)
         ks = self.prueba_kolmogorov_smirnov_normal(
@@ -1062,6 +1236,10 @@ class MotorEstadistico:
             datos=datos,
             alpha=alpha,
         )
+        sw = self.prueba_shapiro_wilk_normal(
+            datos=datos,
+            alpha=alpha,
+        )
         chi2 = self.prueba_chi_cuadrada_normal(
             datos=datos,
             alpha=alpha,
@@ -1069,6 +1247,7 @@ class MotorEstadistico:
         sintesis = self.generar_sintesis_pedagogica(
             resultados_ks=ks,
             resultados_ad=ad,
+            resultados_sw=sw,
             resultados_chi2=chi2,
         )
 
@@ -1076,6 +1255,7 @@ class MotorEstadistico:
             "descriptive_metrics": metricas,
             "kolmogorov_smirnov": ks,
             "anderson_darling": ad,
+            "shapiro_wilk": sw,
             "chi_square": chi2,
             "pedagogical_synthesis": sintesis,
         }

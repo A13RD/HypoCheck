@@ -357,6 +357,10 @@ class TestMotorEstadistico(unittest.TestCase):
         with self.assertRaises(DatosInvalidosError):
             self.motor.prueba_anderson_darling_normal(constante)
 
+        # Shapiro-Wilk debe lanzar DatosInvalidosError ante dispersión cero
+        with self.assertRaises(DatosInvalidosError):
+            self.motor.prueba_shapiro_wilk_normal(constante)
+
         # Chi-cuadrada debe reportar available=False sin error
         res_chi = self.motor.prueba_chi_cuadrada_normal(constante)
         self.assertFalse(res_chi["available"])
@@ -385,11 +389,116 @@ class TestMotorEstadistico(unittest.TestCase):
 
         sintesis = resultado_completo["pedagogical_synthesis"]
         self.assertIn("H0 (Hipótesis Nula)", sintesis)
-        self.assertIn("H1 (Hipótesis Alternativa)", sintesis)
+        self.assertIn("Ha (Hipótesis Alternativa)", sintesis)
         self.assertIn("Kolmogorov-Smirnov", sintesis)
         self.assertIn("Anderson-Darling", sintesis)
+        self.assertIn("Shapiro-Wilk", sintesis)
         self.assertIn("Chi-cuadrada", sintesis)
         self.assertIn("colas", sintesis.lower())
+
+    # -------------------------------------------------------------------------
+    # 17. Shapiro-Wilk con muestra válida
+    # -------------------------------------------------------------------------
+    def test_17_shapiro_wilk_muestra_valida(self) -> None:
+        """Verifica la ejecución correcta de Shapiro-Wilk sobre una muestra normal válida."""
+        rng = np.random.default_rng(101)
+        datos = rng.normal(loc=25.0, scale=3.0, size=40).tolist()
+
+        res = self.motor.prueba_shapiro_wilk_normal(datos, alpha=0.05)
+        self.assertTrue(res["available"])
+        self.assertIsInstance(res["statistic"], float)
+        self.assertIsInstance(res["p_value"], float)
+        self.assertEqual(res["alpha"], 0.05)
+        self.assertIsInstance(res["rejected"], bool)
+        self.assertEqual(res["method"], "Shapiro-Wilk")
+        self.assertEqual(res["warnings"], [])
+        self.assertIn("Shapiro-Wilk", res["academic_verdict"])
+        self.assertIn("H0", res["academic_verdict"])
+
+    # -------------------------------------------------------------------------
+    # 18. Verificación numérica del estadístico W y valor-p de Shapiro-Wilk
+    # -------------------------------------------------------------------------
+    def test_18_shapiro_wilk_verificacion_w_y_pvalor(self) -> None:
+        """Contrasta el estadístico W y valor-p devueltos contra SciPy directamente."""
+        rng = np.random.default_rng(202)
+        datos = rng.normal(loc=0.0, scale=1.0, size=35).tolist()
+
+        res_motor = self.motor.prueba_shapiro_wilk_normal(datos, alpha=0.05)
+        res_scipy = stats.shapiro(datos)
+
+        self.assertAlmostEqual(res_motor["statistic"], float(res_scipy.statistic), places=9)
+        self.assertAlmostEqual(res_motor["p_value"], float(res_scipy.pvalue), places=9)
+
+    # -------------------------------------------------------------------------
+    # 19. Decisión formal según alpha en Shapiro-Wilk
+    # -------------------------------------------------------------------------
+    def test_19_shapiro_wilk_decision_segun_alpha(self) -> None:
+        """Verifica que la decisión formal refleje p < alpha para H0 verdadera y falsa."""
+        rng = np.random.default_rng(303)
+
+        # Muestra normal bajo H0 (no debe rechazar H0 al 5%)
+        normal_data = rng.normal(loc=10.0, scale=2.0, size=50).tolist()
+        res_norm = self.motor.prueba_shapiro_wilk_normal(normal_data, alpha=0.05)
+        self.assertFalse(res_norm["rejected"])
+        self.assertGreaterEqual(res_norm["p_value"], 0.05)
+
+        # Muestra marcadamente no normal (exponencial sesgada, debe rechazar H0)
+        exp_data = rng.exponential(scale=1.5, size=80).tolist()
+        res_exp = self.motor.prueba_shapiro_wilk_normal(exp_data, alpha=0.05)
+        self.assertTrue(res_exp["rejected"])
+        self.assertLess(res_exp["p_value"], 0.05)
+
+    # -------------------------------------------------------------------------
+    # 20. Rechazo de muestras con menos de tres observaciones
+    # -------------------------------------------------------------------------
+    def test_20_shapiro_wilk_rechazo_menos_de_tres_observaciones(self) -> None:
+        """Verifica que muestras con n < 3 lancen DatosInvalidosError."""
+        for entrada in [[], [10.0], [10.0, 20.0]]:
+            with self.assertRaises(DatosInvalidosError):
+                self.motor.prueba_shapiro_wilk_normal(entrada)
+
+    # -------------------------------------------------------------------------
+    # 21. Rechazo de datos NaN e infinitos en Shapiro-Wilk
+    # -------------------------------------------------------------------------
+    def test_21_shapiro_wilk_rechazo_nan_e_infinitos(self) -> None:
+        """Asegura que NaN, +inf, -inf y cadenas sean rechazados por Shapiro-Wilk."""
+        entradas_invalidas = [
+            [1.0, 2.0, float("nan")],
+            [1.0, float("inf"), 3.0],
+            [-float("inf"), 2.0, 4.0],
+            ["x", "y", "z"],
+        ]
+        for entrada in entradas_invalidas:
+            with self.assertRaises(DatosInvalidosError):
+                self.motor.prueba_shapiro_wilk_normal(entrada)
+
+    # -------------------------------------------------------------------------
+    # 22. Manejo de muestras constantes en Shapiro-Wilk
+    # -------------------------------------------------------------------------
+    def test_22_shapiro_wilk_manejo_muestras_constantes(self) -> None:
+        """Verifica que muestras con dispersión cero sean rechazadas indicando imposibilidad de evaluación."""
+        constante = [7.0, 7.0, 7.0, 7.0, 7.0]
+        with self.assertRaises(DatosInvalidosError) as ctx:
+            self.motor.prueba_shapiro_wilk_normal(constante)
+        self.assertIn("dispersión nula", str(ctx.exception).lower())
+
+    # -------------------------------------------------------------------------
+    # 23. Comportamiento con más de 5000 observaciones y advertencia
+    # -------------------------------------------------------------------------
+    def test_23_shapiro_wilk_advertencia_mas_de_5000_observaciones(self) -> None:
+        """Comprueba que muestras con N > 5000 incluyan advertencia sobre precisión de SciPy."""
+        rng = np.random.default_rng(404)
+
+        # Muestra menor a 5000 (sin advertencias)
+        pequena = rng.normal(loc=0.0, scale=1.0, size=200).tolist()
+        res_peq = self.motor.prueba_shapiro_wilk_normal(pequena, alpha=0.05)
+        self.assertEqual(len(res_peq["warnings"]), 0)
+
+        # Muestra mayor a 5000 (debe incluir advertencia documentada)
+        grande = rng.normal(loc=0.0, scale=1.0, size=5005).tolist()
+        res_grande = self.motor.prueba_shapiro_wilk_normal(grande, alpha=0.05)
+        self.assertGreater(len(res_grande["warnings"]), 0)
+        self.assertIn("5000", res_grande["warnings"][0])
 
 
 if __name__ == "__main__":

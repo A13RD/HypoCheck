@@ -24,12 +24,15 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 import numpy as np
+import scipy.stats as stats
 from fastapi.testclient import TestClient
 
 try:
     from backend.app import app, motor_estadistico
+    from backend.engine_estadistico import DatosInvalidosError
 except ImportError:
     from app import app, motor_estadistico
+    from engine_estadistico import DatosInvalidosError
 
 
 class TestAPIIntegracion(unittest.TestCase):
@@ -170,6 +173,7 @@ class TestAPIIntegracion(unittest.TestCase):
         gof = data["goodness_of_fit"]
         self.assertIn("kolmogorov_smirnov", gof)
         self.assertIn("anderson_darling", gof)
+        self.assertIn("shapiro_wilk", gof)
         self.assertIn("chi_square", gof)
 
         # K-S
@@ -181,6 +185,11 @@ class TestAPIIntegracion(unittest.TestCase):
         ad = gof["anderson_darling"]
         for key in ["statistic", "critical_value", "rejected", "academic_verdict"]:
             self.assertIn(key, ad)
+
+        # Shapiro-Wilk
+        sw = gof["shapiro_wilk"]
+        for key in ["available", "statistic", "p_value", "alpha", "rejected", "academic_verdict"]:
+            self.assertIn(key, sw)
 
         # Chi-Square
         cs = gof["chi_square"]
@@ -371,6 +380,141 @@ class TestAPIIntegracion(unittest.TestCase):
             self.assertNotIn("Traceback", data["detail"])
             self.assertNotIn("Fallo simulado", data["detail"])
             self.assertNotIn(".py", data["detail"])
+
+    # -------------------------------------------------------------------------
+    # 16. Endpoint incluye las cuatro pruebas de bondad de ajuste
+    # -------------------------------------------------------------------------
+    def test_16_endpoint_incluye_cuatro_pruebas(self) -> None:
+        """Verifica que POST /api/v1/goodness-of-fit devuelva las 4 pruebas simultáneamente."""
+        rng = np.random.default_rng(505)
+        muestra = rng.normal(loc=50.0, scale=5.0, size=20).tolist()
+
+        response = self.client.post("/api/v1/goodness-of-fit", json={"data": muestra, "alpha": 0.05})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        gof = data["goodness_of_fit"]
+        self.assertIn("kolmogorov_smirnov", gof)
+        self.assertIn("anderson_darling", gof)
+        self.assertIn("shapiro_wilk", gof)
+        self.assertIn("chi_square", gof)
+        self.assertTrue(gof["shapiro_wilk"]["available"])
+
+    # -------------------------------------------------------------------------
+    # 17. Shapiro-Wilk en la API utiliza datos reales y cálculo del motor
+    # -------------------------------------------------------------------------
+    def test_17_shapiro_wilk_utiliza_datos_reales(self) -> None:
+        """Comprueba que los valores de Shapiro-Wilk provengan del motor y no de constantes."""
+        rng = np.random.default_rng(606)
+        muestra = rng.normal(loc=80.0, scale=12.0, size=30).tolist()
+
+        sw_motor = motor_estadistico.prueba_shapiro_wilk_normal(muestra, alpha=0.05)
+
+        response = self.client.post("/api/v1/goodness-of-fit", json={"data": muestra, "alpha": 0.05})
+        self.assertEqual(response.status_code, 200)
+        sw_api = response.json()["goodness_of_fit"]["shapiro_wilk"]
+
+        self.assertAlmostEqual(sw_api["statistic"], sw_motor["statistic"], places=7)
+        self.assertAlmostEqual(sw_api["p_value"], sw_motor["p_value"], places=7)
+        self.assertEqual(sw_api["rejected"], sw_motor["rejected"])
+
+    # -------------------------------------------------------------------------
+    # 18. Transmisión correcta de alpha a Shapiro-Wilk
+    # -------------------------------------------------------------------------
+    def test_18_shapiro_wilk_transmite_alpha_correctamente(self) -> None:
+        """Verifica que niveles de alpha personalizados (0.01, 0.10) se reflejen en Shapiro-Wilk."""
+        rng = np.random.default_rng(707)
+        muestra = rng.normal(loc=0.0, scale=1.0, size=25).tolist()
+
+        for a in [0.01, 0.10]:
+            response = self.client.post("/api/v1/goodness-of-fit", json={"data": muestra, "alpha": a})
+            self.assertEqual(response.status_code, 200)
+            sw = response.json()["goodness_of_fit"]["shapiro_wilk"]
+            self.assertEqual(sw["alpha"], a)
+            self.assertEqual(sw["rejected"], sw["p_value"] < a)
+
+    # -------------------------------------------------------------------------
+    # 19. Comportamiento cuando Shapiro-Wilk no está disponible
+    # -------------------------------------------------------------------------
+    def test_19_shapiro_wilk_comportamiento_no_disponible(self) -> None:
+        """Verifica que si Shapiro-Wilk no está disponible, la API devuelva available=False sin fallar."""
+        with patch.object(
+            motor_estadistico,
+            "prueba_shapiro_wilk_normal",
+            side_effect=DatosInvalidosError("Simulación de no disponibilidad estadística"),
+        ):
+            payload = {"data": [10.0 + i for i in range(15)], "alpha": 0.05}
+            response = self.client.post("/api/v1/goodness-of-fit", json=payload)
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+
+            sw = data["goodness_of_fit"]["shapiro_wilk"]
+            self.assertFalse(sw["available"])
+            self.assertIsNone(sw["statistic"])
+            self.assertIsNone(sw["p_value"])
+            self.assertIsNotNone(sw["reason"])
+            self.assertIn("Simulación de no disponibilidad", sw["reason"])
+
+    # -------------------------------------------------------------------------
+    # 20. Una prueba no disponible no interrumpe a las demás
+    # -------------------------------------------------------------------------
+    def test_20_prueba_no_disponible_no_interrumpe_las_demas(self) -> None:
+        """Asegura que si Chi-cuadrada o Shapiro no están disponibles, K-S y A-D funcionen con 200."""
+        # Con n = 11, Chi-cuadrada no es aplicable (v <= 0)
+        muestra_pequena = [float(x) for x in range(11)]
+        response = self.client.post("/api/v1/goodness-of-fit", json={"data": muestra_pequena, "alpha": 0.05})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        gof = data["goodness_of_fit"]
+        self.assertFalse(gof["chi_square"]["available"])
+        self.assertTrue(gof["kolmogorov_smirnov"]["statistic"] is not None)
+        self.assertTrue(gof["anderson_darling"]["statistic"] is not None)
+        self.assertTrue(gof["shapiro_wilk"]["available"])
+        self.assertIn("Chi2", data["pedagogical_synthesis"])
+
+    # -------------------------------------------------------------------------
+    # 21. Chi-cuadrada conserva su comportamiento anterior
+    # -------------------------------------------------------------------------
+    def test_21_chi_cuadrada_conserva_comportamiento_anterior(self) -> None:
+        """Verifica que el algoritmo de fusión y grados de libertad de Chi-cuadrada permanezcan intactos."""
+        rng = np.random.default_rng(808)
+        datos_60 = rng.normal(loc=100.0, scale=15.0, size=60).tolist()
+
+        response = self.client.post("/api/v1/goodness-of-fit", json={"data": datos_60, "alpha": 0.05})
+        self.assertEqual(response.status_code, 200)
+        chi2 = response.json()["goodness_of_fit"]["chi_square"]
+
+        self.assertTrue(chi2["available"])
+        self.assertGreater(chi2["degrees_of_freedom"], 0)
+        self.assertEqual(chi2["degrees_of_freedom"], chi2["merged_classes_count"] - 3)
+        self.assertAlmostEqual(
+            chi2["critical_value"],
+            float(stats.chi2.ppf(0.95, chi2["degrees_of_freedom"])),
+            places=5,
+        )
+
+    # -------------------------------------------------------------------------
+    # 22. Resultados de pruebas anteriores no cambiaron por la incorporación
+    # -------------------------------------------------------------------------
+    def test_22_resultados_pruebas_anteriores_no_cambiaron(self) -> None:
+        """Verifica que las métricas descriptivas, K-S y A-D no hayan sufrido regresión alguna."""
+        datos = [12.0, 15.0, 14.0, 10.0, 18.0, 19.0, 22.0, 17.0, 16.0, 13.0, 11.0, 14.0]
+
+        direct_dm = motor_estadistico.calcular_metricas_descriptivas(datos)
+        direct_ad = motor_estadistico.prueba_anderson_darling_normal(datos, alpha=0.05)
+
+        response = self.client.post("/api/v1/goodness-of-fit", json={"data": datos, "alpha": 0.05})
+        self.assertEqual(response.status_code, 200)
+        api_data = response.json()
+
+        self.assertAlmostEqual(api_data["descriptive_metrics"]["mean"], direct_dm["mean"], places=9)
+        self.assertAlmostEqual(api_data["descriptive_metrics"]["variance"], direct_dm["variance"], places=9)
+        self.assertAlmostEqual(
+            api_data["goodness_of_fit"]["anderson_darling"]["statistic"],
+            direct_ad["statistic"],
+            places=9,
+        )
 
 
 if __name__ == "__main__":
